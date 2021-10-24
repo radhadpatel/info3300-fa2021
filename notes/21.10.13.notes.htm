@@ -15,7 +15,19 @@
   
   <style>
   
-  
+  .state {
+    fill: lightgrey;
+  }
+  .outline {
+    stroke: black;
+    stroke-width: 1px;
+    fill: none;
+  }
+  .graticule {
+      fill: none;
+      stroke: grey;
+      stroke-width: 1px;
+  }
   
   
 
@@ -97,96 +109,209 @@
     //   "../datasets/us-smaller.json"
     const us = await d3.json("../datasets/us-smaller.json");
     console.log(us);
-    // Here *await* is waiting for the promise from d3.json to finish, then assigning the result to const us
-    // In practice you should always do error handling -- see the docs linked above for details
-    
   
     // 2b. Pick out topographic features and build d3 helpers
+    var states = topojson.feature(us, us.objects.states);     // List of state outlines to fill
+    var statesMesh = topojson.mesh(us, us.objects.states);    // 'Mesh' of all outlines put together for a stroke
+    var projection = d3.geoAlbersUsa().fitSize([mapWidth, mapHeight], states);
+    var path = d3.geoPath().projection(projection);
+    console.log(states);
+    console.log(statesMesh);
+    
+    // We tried a few different projections, including:
+    //   .geoOrthographic().rotate([90,-30,0])  .geoConicEqualArea()   .geoMercator()
+    
+    // 2d. Add a graticule (we did this after 2c, but it must go here)
+    //      (Graticules are much more configurable, but we'll use the default for now)
+    var graticule = d3.geoGraticule10();
+    map.append("path").attr("class","graticule").attr("d", path(graticule) )
     
     
-    
-    // 2c. Draw states and outlines
-    
-    
-       
-   // 2d. Add a graticule (we did this after 2c, but it must go here)
-   //      (Graticules are much more configurable, but we'll use the default for now)
-   
-   
-   
-   
-   
+    // 2c. Draw states and outlines (see CSS at the top)
+    map.selectAll("path.state").data(states.features)
+       .join("path")
+       .attr("class", "state")
+       .attr("note", d => d.id)  // debugging
+       .attr("d", path)
+       .on('mouseover', mouseEntersPlot )
+       .on('mouseout', mouseLeavesPlot );
   
-    // 3a. Import survey data as synchronous call
+    map.append("path").datum(statesMesh)
+       .attr("class","outline")
+       .attr("d", path);
+  
+    // 3a. Import survey data as synchronous calls
     // "../datasets/state-survey-responses-fa21.csv"
-    
-    
-    
-    // 3b. Generate the dictionary we will need
-    
-    
+    var surveyData = await d3.csv("../datasets/state-survey-responses-fa21.csv", d3.autotype);
+    console.log(surveyData)
   
+    // 3b. Generate the dictionary we will need
+    let stateIdCounts = {}; // stateIdCounts[ stateId ] -> count
+    let stateIdNames = {}; // stateIdNames[ stateId ] -> name
+    
+    surveyData.forEach( row => {
+      stateIdCounts[ row.state_code ] = Number(row.total);
+      stateIdNames[ row.state_code ] = row.state_name;
+    });
+    console.log(stateIdCounts)
   
     // 3c. Make a d3 color scale for frequency    
-    
-    
-    
-    
+    // Notice that stateIdCounts is a dictionary and not an array, which is usually what we send to d3.extent
+    // We're only interested in the values in that dictionary, so we can use a static helper function in Object to help
+    const minMax = d3.extent( Object.values(stateIdCounts) );
+    console.log(minMax);
+  
+    // This scale wasn't great because it crunched most of the points to the bottom 3rd of the color scale
+    //  3 state outliers with high values mean it is very distorted
+    // const colorScale = d3.scaleSequential(d3.interpolateGnBu).domain(minMax);
+  
+    // Next, we try quantize, which splits the domain into bins
+    // In general, it splits it into as many bins as you provide items in the range
+  
+    // const colorScale = d3.scaleQuantize()
+    //                      .domain(minMax)
+    //                      .range(["rgb(233, 240, 194)", "rgb(174, 226, 142)", "rgb(45, 177, 149)", "rgb(36, 112, 191)"])
+    //  NOTE: I tried to make the scale a little bit less ugly than the one I demoed in class -- with varying degrees of success...
+  
+    // Finally, we use quantile, which looks at the points statistically
+    //  It will give weird results if you send minMax to the .domain(). Why?
+    //  ...because it needs to inspect *all of the values* in order to see the point *distribution*
+    //  we use Object.values() here to get all of the values out of the stateCounts dictionary
+  
+    const colorScale = d3.scaleQuantile()
+                         .domain(Object.values(stateIdCounts))
+                         .range(["#fff","#d1e8ed","#adc2da","#8879b3","#762b80"]);
+  
+  
+     // //  If you want to use a log scale instead of a linear quantile (which might work better):
+     // //   Here is one way to do this (note the use of Symlog because our domain includes 0)
+     // //   We create a new function that feeds the data value into a Symlog scale programmed to return 0 to 1
+     // //   It then routes the [0,1] value to interpolateGnBu, which returns a color, doing what we want
+     // //   Just like with normal scales, you feed them a data value and get back a color/pixel
+     // const colorScale = d => d3.interpolateGnBu( d3.scaleSymlog().domain(minMax).range([0,1])(d) );
+     // colorScale.domain = () => minMax;  // Hack to get legend working again because it uses scale.domain()
+     // // Another way to do this would be:
+     // const colorScale = d3.scaleLog().domain(minMax).interpolate(d => d3.interpolateGnBu)
+     // // Getting a scaleQuantile to work would be a bit trickier
+     // // You'll want to think about how to adjust the domain of the scale (hint: d3.map to transform data)
+     // //   and then also how you're going to show the values legend in the bottom scale
   
   
     // 3d. Recolor the states to make a choropleth map
-    
-    
-    
+    map.selectAll(".state")
+       .style("fill", d => colorScale( stateIdCounts[d.id]) );
   
     // 3e. Use the extra legend code to draw a legend
-    
-    
+    drawLegend(d3.select("#colorLegend"), colorScale);
   
     
-    // for later: ["#fff","#d1e8ed","#adc2da","#8879b3","#762b80"]
   
     // 4. Add a tooltip that "sticks" below the state
+    let tooltipWidth = 120;
+    let tooltipHeight = 40;
+    
+    
+    // At the end of lecture segment, we added this code to do the mouseover outline the "proper" way
+    let momesh =  map.append("path")
+                     .attr("class","mouseover outline")
+                     .attr("d", "");
   
+    // Stub code to draw the tooltip - we use an SVG element here
+    // You can use an absolute-positioned HTML element, but the positioning requires some more work
+    // Instead, we make something centered at (0,0) and then later use translate() to move it
+    //  (this is why the x position for the rect is -tooltipWidth/2.0  -- so it's centered on 0 )
+    let tooltip = map.append("g")
+                     .attr("class","tooltip")
+                     .attr("visibility","hidden");
+    tooltip.append("rect")
+           .attr("fill", "black")
+           .attr("opacity", 0.9)
+           .attr("x", -tooltipWidth / 2.0)
+           .attr("y", 0)
+           .attr("width",tooltipWidth)
+           .attr("height",tooltipHeight)
+    let txt = tooltip.append("text")
+                     .attr("fill", "white")
+                     .attr("text-anchor","middle")
+                     .attr("alignment-baseline","hanging")
+                     .attr("x", 0)
+                     .attr("y", 2);
+    let txt2 = tooltip.append("text")
+                     .attr("fill", "white")
+                     .attr("text-anchor","middle")
+                     .attr("alignment-baseline","hanging")
+                     .attr("x", 0)
+                     .attr("y", 22);
+    
+    
+                     
   
-    // // Stub code to draw the tooltip - we use an SVG element here
-    // // You can use an absolute-positioned HTML element, but the positioning requires some more work
-    // // Instead, we make something centered at (0,0) and then later use translate() to move it
-    // //  (this is why the x position for the rect is -tooltipWidth/2.0  -- so it's centered on 0 )
-    // let tooltip = map.append("g")
-    //                  .attr("class","tooltip")
-    //                  .attr("visibility","hidden");
-    // tooltip.append("rect")
-    //        .attr("fill", "black")
-    //        .attr("opacity", 0.9)
-    //        .attr("x", -tooltipWidth / 2.0)
-    //        .attr("y", 0)
-    //        .attr("width",tooltipWidth)
-    //        .attr("height",tooltipHeight)
-    // let txt = tooltip.append("text")
-    //                  .attr("fill", "white")
-    //                  .attr("text-anchor","middle")
-    //                  .attr("alignment-baseline","hanging")
-    //                  .attr("x", 0)
-    //                  .attr("y", 2);
-    // let txt2 = tooltip.append("text")
-    //                  .attr("fill", "white")
-    //                  .attr("text-anchor","middle")
-    //                  .attr("alignment-baseline","hanging")
-    //                  .attr("x", 0)
-    //                  .attr("y", 22);
-    
-    
-    
+    d3.selectAll(".state").on("mouseenter", mouseEntersPlot);
+    d3.selectAll(".state").on("mouseout",  mouseLeavesPlot);
   
     function mouseEntersPlot() {
+      // Make tooltip visible
+      tooltip.style("visibility","visible")
+  
+      // Find the state SVG element and add stroke
+      let state = d3.select(this);
+      
+      // // Original version
+      // state.attr("stroke","black")
+      //      .attr("stroke-width", 3);
+      
+      // Using .datum() to recover the data for the state element (because we used a .join() to make it)...
+      // ... get the name of the state and count
+      let stateID = state.datum().id;
+      console.log(state.datum())
+      
+      txt.text(stateIdNames[ stateID ]);
+      txt2.text(stateIdCounts[  stateID  ]);
+      
+      // You can use the geoPath() generator to do all sorts of helpful things 
+      // let centroid = path.centroid( state.datum() );  // Get the pixel "center" of the state
+      let bounds = path.bounds( state.datum() );   // Get the pixel boundaries of the state
+      // In both cases here, the geoPath() is parsing the fancy topoJSON data to figure out pixels using the projection
+      
+      // Place it at the bottom of the state, centered
+      let xPos = (bounds[0][0]+bounds[1][0])/2.0;
+      let yPos = bounds[1][1] - 15;
+      
+      // Transform the <g> group so that everything moves together easily
+      tooltip.attr("transform",`translate(${xPos},${yPos})`);
+      
+      // To fix the oscillation, we add this in the CSS for .mouseover
+      //  pointer-events: none;
+      
+      // Technically, the right way to do this is with another mesh for some complicated reasons
+      //  You have to use the second parameter of topojson.mesh() to pick out this state's boundaries
+      // At the end of the lecture we tried this out
+      //  First, make a new mesh with a filter for only borders of the current state
+      var mo = topojson.mesh(us, us.objects.states, function(a, b) { return a.id === stateID || b.id === stateID; });
+      //  Then apply it to your special mesh that's on top of everything else
+      momesh.datum(mo).attr("d", path)
+      
+      
+      
+  
     }
   
     function mouseLeavesPlot() {
+  
+     // Hide when you leave a state
+     tooltip.style("visibility","hidden");
+  
+     let state = d3.select(this);
+     
+     // Reset old style mouseover stroke
+     // state.attr("stroke","none")
+     //      .attr("stroke-width", 0);
+     // }
+  
+     // Here we are hiding the mouseover mesh we added at the end of the lecture
+     momesh.attr("d", "");
+  
     }
-    
-    
-    
     
     
   }
